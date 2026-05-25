@@ -1,0 +1,56 @@
+# LLM Scheduler 配置
+
+server:
+  port: 8082
+  host: "0.0.0.0"
+
+gpus:
+  - id: "nvidia-5070ti"
+    type: "nvidia"
+    vram_mb: 16384
+    max_model_mb: 14000  # 预留 2GB 给推理开销
+    
+  - id: "amd-7900xtx"
+    type: "amd"
+    vram_mb: 24576
+    max_model_mb: 22000  # 预留 2GB
+
+backends:
+  ollama:
+    enabled: true
+    base_url: "http://localhost:11434"
+    
+  vllm:
+    enabled: false
+    base_url: "http://localhost:8000"
+
+# 模型配置（按大小分档）
+models:
+  small:  # 7B 以下，优先 5070Ti
+    max_vram_mb: 8000
+    preferred_gpu: "nvidia-5070ti"
+    examples:
+      - "qwen2.5:3b"
+      - "llama3.2:3b"
+      - "gemma2:9b"
+      
+  medium:  # 8-15B，优先 5070Ti
+    max_vram_mb: 14000
+    preferred_gpu: "nvidia-5070ti"
+    examples:
+      - "qwen2.5:14b"
+      - "llama3.1:8b"
+      
+  large:  # 20B+，必须 7900XTX
+    max_vram_mb: 22000
+    preferred_gpu: "amd-7900xtx"
+    examples:
+      - "qwen2.5:32b"
+      - "deepseek-r1:32b"
+      - "llama3.3:70b"  # 需要量化
+
+scheduler:
+  queue_size: 100
+  batch_timeout_ms: 100  # 批处理等待时间
+  max_batch_size: 8
+  model_unload_after_s: 300  # 5分钟无请求卸载模型
