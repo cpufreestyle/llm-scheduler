@@ -28,9 +28,11 @@ func main() {
 	// Register backends
 	ollama := backend.NewOllamaBackend("http://localhost:11434")
 	lmstudio := backend.NewLMStudioBackend("http://localhost:1234")
+	vllm := backend.NewVLLMBackend("http://localhost:8000", "") // apiKey can be set via env
 	
 	backendManager.Register("ollama", ollama)
 	backendManager.Register("lmstudio", lmstudio)
+	backendManager.Register("vllm", vllm)
 	
 	// Initialize GPU monitor
 	monitor := gpu.NewMonitor()
