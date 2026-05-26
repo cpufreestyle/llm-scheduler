@@ -261,6 +261,10 @@ func (s *Scheduler) cleanupIdleModels() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	
+	if !s.planner.HasGPU() {
+		return // CPU 模式下不需要自动卸载
+	}
+	
 	// 检查每个加载的模型是否还有请求
 	for model, gpuID := range s.modelGPU {
 		hasActive := false

@@ -1,7 +1,6 @@
 package vram
 
 import (
-	"fmt"
 	"strings"
 )
 
@@ -102,8 +101,19 @@ func (p *Planner) EstimateModelVRAM(model string) int {
 	return 10000
 }
 
+// HasGPU 检查是否注册了 GPU
+func (p *Planner) HasGPU() bool {
+	return len(p.gpus) > 0
+}
+
 // SelectBestGPU 选择最适合的 GPU
+// 当没有注册 GPU 时返回 "cpu" 表示 CPU 直通模式
 func (p *Planner) SelectBestGPU(model string, preferredGPU string) (string, error) {
+	// 无 GPU 注册时进入直通模式
+	if len(p.gpus) == 0 {
+		return "cpu", nil
+	}
+	
 	requiredVRAM := p.EstimateModelVRAM(model)
 	
 	// 优先使用指定 GPU
@@ -137,7 +147,8 @@ func (p *Planner) SelectBestGPU(model string, preferredGPU string) (string, erro
 	}
 	
 	if bestGPU == "" {
-		return "", fmt.Errorf("no GPU has enough VRAM for model %s (requires %d MB)", model, requiredVRAM)
+		// 无合适 GPU 也退化为直通模式
+		return "cpu", nil
 	}
 	
 	return bestGPU, nil

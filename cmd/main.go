@@ -38,10 +38,19 @@ func main() {
 	monitor := gpu.NewMonitor()
 	monitor.Start()
 	
-	// Initialize VRAM planner
+	// Initialize VRAM planner — register detected GPUs only
 	planner := vram.NewPlanner()
-	planner.RegisterGPU("nvidia-5070ti", "nvidia", 16384, 14000)
-	planner.RegisterGPU("amd-7900xtx", "amd", 24576, 22000)
+	for _, g := range monitor.GetAllGPUs() {
+		log.Printf("Detected GPU: %s (%s, %d MB)", g.ID, g.Type, g.VRAMTotalMB)
+		maxModel := g.VRAMTotalMB - 2000 // 预留 2GB
+		if maxModel < 1000 {
+			maxModel = g.VRAMTotalMB // 小显存不预留
+		}
+		planner.RegisterGPU(g.ID, g.Type, g.VRAMTotalMB, maxModel)
+	}
+	if !planner.HasGPU() {
+		log.Println("No GPU detected, running in CPU passthrough mode")
+	}
 	
 	// Create scheduler with primary backend
 	sch = scheduler.NewScheduler(scheduler.Config{
