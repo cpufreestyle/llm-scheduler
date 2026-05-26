@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -58,6 +60,10 @@ func main() {
 	r.GET("/v1/models", handleListModels)
 	r.GET("/v1/models/:model", handleGetModel)
 	
+	// Dashboard
+	r.GET("/", handleDashboard)
+	r.GET("/dashboard", handleDashboard)
+
 	// Management API
 	r.GET("/api/status", handleStatus)
 	r.GET("/api/gpus", handleGPUs)
@@ -386,4 +392,15 @@ func handleUnloadModel(c *gin.Context) {
 	}
 	
 	c.JSON(200, gin.H{"status": "unloaded", "model": req.Model, "backend": b.Name()})
+}
+
+func handleDashboard(c *gin.Context) {
+	exePath, _ := os.Executable()
+	exeDir := filepath.Dir(exePath)
+	dashboardPath := filepath.Join(exeDir, "dashboard.html")
+	if _, err := os.Stat(dashboardPath); err != nil {
+		// Fallback: try working directory
+		dashboardPath = "dashboard.html"
+	}
+	c.File(dashboardPath)
 }

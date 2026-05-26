@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LLM Scheduler Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; }
+.header { background: linear-gradient(135deg, #1e293b 0%, #334155 100%); padding: 20px 30px; border-bottom: 2px solid #3b82f6; }
+.header h1 { font-size: 24px; font-weight: 700; }
+.header .subtitle { color: #94a3b8; font-size: 14px; margin-top: 4px; }
+.container { max-width: 1400px; margin: 0 auto; padding: 20px; display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+.card { background: #1e293b; border-radius: 12px; padding: 20px; border: 1px solid #334155; }
+.card h2 { font-size: 16px; color: #94a3b8; margin-bottom: 16px; text-transform: uppercase; letter-spacing: 1px; }
+.card.full { grid-column: 1 / -1; }
+.gpu-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.gpu-card { background: #0f172a; border-radius: 8px; padding: 16px; border-left: 4px solid; }
+.gpu-card.nvidia { border-left-color: #76b900; }
+.gpu-card.amd { border-left-color: #ed1c24; }
+.gpu-name { font-size: 18px; font-weight: 700; margin-bottom: 12px; }
+.gpu-stat { display: flex; justify-content: space-between; margin: 6px 0; font-size: 14px; }
+.gpu-stat .label { color: #94a3b8; }
+.gpu-stat .value { font-weight: 600; }
+.gpu-stat .value.warn { color: #f59e0b; }
+.gpu-stat .value.good { color: #22c55e; }
+.gpu-stat .value.danger { color: #ef4444; }
+.vram-bar { height: 8px; background: #334155; border-radius: 4px; margin-top: 8px; overflow: hidden; }
+.vram-bar-fill { height: 100%; border-radius: 4px; transition: width 0.5s; }
+.vram-bar-fill.low { background: #22c55e; }
+.vram-bar-fill.mid { background: #f59e0b; }
+.vram-bar-fill.high { background: #ef4444; }
+.model-badge { display: inline-block; background: #3b82f6; color: white; padding: 2px 8px; border-radius: 4px; font-size: 12px; margin-top: 8px; }
+.backend-status { display: flex; gap: 12px; margin-bottom: 16px; }
+.backend-item { flex: 1; background: #0f172a; border-radius: 8px; padding: 12px; text-align: center; }
+.backend-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+.backend-dot.online { background: #22c55e; }
+.backend-dot.offline { background: #ef4444; }
+.task-list { max-height: 300px; overflow-y: auto; }
+.task-item { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; border-bottom: 1px solid #334155; font-size: 13px; }
+.task-status { padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; }
+.task-status.pending { background: #f59e0b33; color: #f59e0b; }
+.task-status.running { background: #3b82f633; color: #3b82f6; }
+.task-status.completed { background: #22c55e33; color: #22c55e; }
+.task-status.failed { background: #ef444433; color: #ef4444; }
+.chart-container { height: 200px; }
+.refresh-info { text-align: center; color: #64748b; font-size: 12px; margin-top: 12px; }
+.btn { padding: 6px 14px; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600; }
+.btn-primary { background: #3b82f6; color: white; }
+.btn-danger { background: #ef4444; color: white; }
+.btn-sm { padding: 3px 10px; font-size: 12px; }
+@media (max-width: 768px) { .container { grid-template-columns: 1fr; } .gpu-grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>🧠 LLM Scheduler</h1>
+  <div class="subtitle">GPU-Aware Inference Scheduler</div>
+</div>
+<div class="container">
+  <!-- GPU Status -->
+  <div class="card full">
+    <h2>🖥️ GPU Status</h2>
+    <div class="gpu-grid" id="gpuGrid"></div>
+  </div>
+  
+  <!-- Backend Status -->
+  <div class="card">
+    <h2>🔌 Backends</h2>
+    <div class="backend-status" id="backendStatus"></div>
+    <div id="modelList"></div>
+  </div>
+  
+  <!-- Scheduler Status -->
+  <div class="card">
+    <h2>📊 Scheduler</h2>
+    <div class="gpu-stat"><span class="label">Queue Length</span><span class="value" id="queueLen">0</span></div>
+    <div class="gpu-stat"><span class="label">Active Tasks</span><span class="value" id="activeCount">0</span></div>
+    <div class="gpu-stat"><span class="label">Models Loaded</span><span class="value" id="modelsLoaded">0</span></div>
+    <div class="chart-container"><canvas id="vramChart"></canvas></div>
+  </div>
+  
+  <!-- Task Queue -->
+  <div class="card full">
+    <h2>📋 Tasks</h2>
+    <div class="task-list" id="taskList">
+      <div class="task-item" style="color:#64748b">No tasks</div>
+    </div>
+  </div>
+</div>
+<div class="refresh-info">Auto-refresh every 5s | <span id="lastUpdate">-</span></div>
+
+<script>
+let vramChart;
+
+async function fetchStatus() {
+  try {
+    const resp = await fetch('/api/status');
+    const data = await resp.json();
+    updateDashboard(data);
+  } catch(e) {
+    console.error('Fetch failed:', e);
+  }
+}
+
+function updateDashboard(data) {
+  // GPU cards
+  const gpuGrid = document.getElementById('gpuGrid');
+  if (data.gpus) {
+    gpuGrid.innerHTML = data.gpus.map(gpu => {
+      const pct = gpu.vram_total_mb > 0 ? Math.round(gpu.vram_used_mb / gpu.vram_total_mb * 100) : 0;
+      const cls = pct < 50 ? 'low' : pct < 80 ? 'mid' : 'high';
+      const tempCls = gpu.temperature < 60 ? 'good' : gpu.temperature < 80 ? 'warn' : 'danger';
+      return `<div class="gpu-card ${gpu.type}">
+        <div class="gpu-name">${gpu.type === 'nvidia' ? '🟢' : '🔴'} ${gpu.id}</div>
+        <div class="gpu-stat"><span class="label">VRAM</span><span class="value">${gpu.vram_used_mb}MB / ${gpu.vram_total_mb}MB</span></div>
+        <div class="vram-bar"><div class="vram-bar-fill ${cls}" style="width:${pct}%"></div></div>
+        <div class="gpu-stat"><span class="label">Utilization</span><span class="value">${gpu.utilization}%</span></div>
+        <div class="gpu-stat"><span class="label">Temperature</span><span class="value ${tempCls}">${gpu.temperature}°C</span></div>
+        ${gpu.model_loaded ? `<div class="model-badge">📦 ${gpu.model_loaded}</div>` : ''}
+      </div>`;
+    }).join('');
+  }
+  
+  // Backends
+  const backendDiv = document.getElementById('backendStatus');
+  if (data.backends) {
+    backendDiv.innerHTML = Object.entries(data.backends).map(([name, info]) => {
+      const online = info.status === 'online';
+      return `<div class="backend-item">
+        <span class="backend-dot ${online ? 'online' : 'offline'}"></span>
+        <strong>${name}</strong><br>
+        <small style="color:#94a3b8">${online ? info.models + ' models' : 'offline'}</small>
+      </div>`;
+    }).join('');
+  }
+  
+  // Scheduler stats
+  document.getElementById('queueLen').textContent = data.queue_length || 0;
+  document.getElementById('activeCount').textContent = data.active_count || 0;
+  document.getElementById('modelsLoaded').textContent = data.models_loaded ? Object.keys(data.models_loaded).length : 0;
+  
+  // VRAM chart
+  if (data.gpus && data.gpus.length > 0) {
+    updateChart(data.gpus);
+  }
+  
+  document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString();
+}
+
+function updateChart(gpus) {
+  const labels = gpus.map(g => g.id);
+  const used = gpus.map(g => g.vram_used_mb);
+  const free = gpus.map(g => g.vram_free_mb);
+  
+  if (vramChart) {
+    vramChart.data.labels = labels;
+    vramChart.data.datasets[0].data = used;
+    vramChart.data.datasets[1].data = free;
+    vramChart.update();
+    return;
+  }
+  
+  vramChart = new Chart(document.getElementById('vramChart'), {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        { label: 'Used VRAM (MB)', data: used, backgroundColor: '#3b82f6' },
+        { label: 'Free VRAM (MB)', data: free, backgroundColor: '#1e3a5f' }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      scales: { x: { stacked: true, ticks: { color: '#94a3b8' } }, y: { stacked: true, ticks: { color: '#94a3b8' } } },
+      plugins: { legend: { labels: { color: '#94a3b8' } } }
+    }
+  });
+}
+
+// Auto-refresh
+fetchStatus();
+setInterval(fetchStatus, 5000);
+</script>
+</body>
+</html>
