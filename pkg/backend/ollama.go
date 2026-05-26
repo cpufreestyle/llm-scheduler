@@ -23,6 +23,8 @@ func NewOllamaBackend(baseURL string) *OllamaBackend {
 	}
 }
 
+func (b *OllamaBackend) Name() string { return "ollama" }
+
 type ModelInfo struct {
 	Name string `json:"name"`
 	Size int64  `json:"size"`

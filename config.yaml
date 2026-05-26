@@ -19,10 +19,17 @@ backends:
   ollama:
     enabled: true
     base_url: "http://localhost:11434"
+    priority: 1  # 优先级：1=最高
+    
+  lmstudio:
+    enabled: true
+    base_url: "http://localhost:1234"
+    priority: 2  # 备选
     
   vllm:
     enabled: false
     base_url: "http://localhost:8000"
+    priority: 3
 
 # 模型配置（按大小分档）
 models:
@@ -54,3 +61,4 @@ scheduler:
   batch_timeout_ms: 100  # 批处理等待时间
   max_batch_size: 8
   model_unload_after_s: 300  # 5分钟无请求卸载模型
+  prefer_backend: "ollama"  # 首选后端：ollama/lmstudio/vllm

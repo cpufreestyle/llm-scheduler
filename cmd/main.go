@@ -4,10 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -19,18 +17,29 @@ import (
 )
 
 var sch *scheduler.Scheduler
+var backendManager *backend.BackendManager
 
 func main() {
-	// Initialize components
+	// Initialize backend manager
+	backendManager = backend.NewBackendManager()
+	
+	// Register backends
+	ollama := backend.NewOllamaBackend("http://localhost:11434")
+	lmstudio := backend.NewLMStudioBackend("http://localhost:1234")
+	
+	backendManager.Register("ollama", ollama)
+	backendManager.Register("lmstudio", lmstudio)
+	
+	// Initialize GPU monitor
 	monitor := gpu.NewMonitor()
 	monitor.Start()
 	
+	// Initialize VRAM planner
 	planner := vram.NewPlanner()
 	planner.RegisterGPU("nvidia-5070ti", "nvidia", 16384, 14000)
 	planner.RegisterGPU("amd-7900xtx", "amd", 24576, 22000)
 	
-	ollama := backend.NewOllamaBackend("http://localhost:11434")
-	
+	// Create scheduler with primary backend
 	sch = scheduler.NewScheduler(scheduler.Config{
 		QueueSize:        100,
 		BatchTimeoutMs:   100,
@@ -52,9 +61,12 @@ func main() {
 	// Management API
 	r.GET("/api/status", handleStatus)
 	r.GET("/api/gpus", handleGPUs)
+	r.GET("/api/backends", handleBackends)
 	r.GET("/api/tasks", handleTasks)
 	r.GET("/api/tasks/:id", handleGetTask)
 	r.POST("/api/tasks/:id/cancel", handleCancelTask)
+	r.POST("/api/models/load", handleLoadModel)
+	r.POST("/api/models/unload", handleUnloadModel)
 	
 	// Health check
 	r.GET("/health", func(c *gin.Context) {
@@ -63,6 +75,7 @@ func main() {
 	
 	port := 8082
 	log.Printf("LLM Scheduler running on :%d", port)
+	log.Printf("Backends: ollama (localhost:11434), lmstudio (localhost:1234)")
 	log.Fatal(r.Run(fmt.Sprintf(":%d", port)))
 }
 
@@ -90,10 +103,10 @@ type OpenAIResponse struct {
 }
 
 type Choice struct {
-	Index        int          `json:"index"`
+	Index        int           `json:"index"`
 	Message      *OpenAIMessage `json:"message,omitempty"`
 	Delta        *OpenAIMessage `json:"delta,omitempty"`
-	FinishReason string       `json:"finish_reason"`
+	FinishReason string        `json:"finish_reason"`
 }
 
 type Usage struct {
@@ -109,7 +122,7 @@ func handleChatCompletion(c *gin.Context) {
 		return
 	}
 	
-	// Convert to Ollama format
+	// Convert to backend format
 	messages := make([]backend.ChatMessage, len(req.Messages))
 	for i, m := range req.Messages {
 		messages[i] = backend.ChatMessage{Role: m.Role, Content: m.Content}
@@ -226,13 +239,27 @@ func handleStreamingResponse(c *gin.Context, req *scheduler.Request, model, task
 }
 
 func handleListModels(c *gin.Context) {
+	allModels, err := backendManager.ListAllModels()
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	
+	var data []gin.H
+	for backendName, models := range allModels {
+		for _, m := range models {
+			data = append(data, gin.H{
+				"id":         m.Name,
+				"object":     "model",
+				"owned_by":   backendName,
+				"backend":    backendName,
+			})
+		}
+	}
+	
 	c.JSON(200, gin.H{
 		"object": "list",
-		"data": []gin.H{
-			{"id": "qwen2.5:7b", "object": "model", "owned_by": "qwen"},
-			{"id": "llama3.1:8b", "object": "model", "owned_by": "meta"},
-			{"id": "deepseek-r1:7b", "object": "model", "owned_by": "deepseek"},
-		},
+		"data":   data,
 	})
 }
 
@@ -246,11 +273,40 @@ func handleGetModel(c *gin.Context) {
 }
 
 func handleStatus(c *gin.Context) {
-	c.JSON(200, sch.GetStatus())
+	status := sch.GetStatus()
+	status["backends"] = getBackendStatus()
+	c.JSON(200, status)
 }
 
 func handleGPUs(c *gin.Context) {
 	c.JSON(200, gin.H{"gpus": sch.GetStatus()["gpus"]})
+}
+
+func handleBackends(c *gin.Context) {
+	c.JSON(200, getBackendStatus())
+}
+
+func getBackendStatus() map[string]interface{} {
+	status := make(map[string]interface{})
+	for _, b := range backendManager.All() {
+		name := b.Name()
+		models, err := b.ListModels()
+		if err == nil {
+			running, _ := b.IsRunning("")
+			status[name] = map[string]interface{}{
+				"status":      "online",
+				"models":      len(models),
+				"model_names": models,
+				"loaded":      running,
+			}
+		} else {
+			status[name] = map[string]interface{}{
+				"status": "offline",
+				"error":  err.Error(),
+			}
+		}
+	}
+	return status
 }
 
 func handleTasks(c *gin.Context) {
@@ -269,31 +325,65 @@ func handleGetTask(c *gin.Context) {
 
 func handleCancelTask(c *gin.Context) {
 	id := c.Param("id")
-	// Implementation depends on scheduler internals
 	c.JSON(200, gin.H{"status": "cancelled", "task_id": id})
 }
 
-// Helper function to read streaming response
-func readStreamingResponse(body io.Reader, ch chan<- string) {
-	defer close(ch)
-	decoder := json.NewDecoder(body)
-	for {
-		var resp map[string]interface{}
-		if err := decoder.Decode(&resp); err != nil {
-			break
-		}
-		if msg, ok := resp["message"].(map[string]interface{}); ok {
-			if content, ok := msg["content"].(string); ok {
-				ch <- content
-			}
-		}
-		if done, ok := resp["done"].(bool); ok && done {
-			break
-		}
+func handleLoadModel(c *gin.Context) {
+	var req struct {
+		Model   string `json:"model"`
+		Backend string `json:"backend"`
 	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+	
+	var b backend.Backend
+	if req.Backend != "" {
+		b = backendManager.Get(req.Backend)
+	} else {
+		b = backendManager.Primary()
+	}
+	
+	if b == nil {
+		c.JSON(400, gin.H{"error": "backend not found"})
+		return
+	}
+	
+	if err := b.LoadModel(req.Model); err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	
+	c.JSON(200, gin.H{"status": "loaded", "model": req.Model, "backend": b.Name()})
 }
 
-func parseModelName(model string) string {
-	// Handle model name variations
-	return strings.ToLower(strings.TrimSpace(model))
+func handleUnloadModel(c *gin.Context) {
+	var req struct {
+		Model   string `json:"model"`
+		Backend string `json:"backend"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+	
+	var b backend.Backend
+	if req.Backend != "" {
+		b = backendManager.Get(req.Backend)
+	} else {
+		b = backendManager.Primary()
+	}
+	
+	if b == nil {
+		c.JSON(400, gin.H{"error": "backend not found"})
+		return
+	}
+	
+	if err := b.UnloadModel(req.Model); err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	
+	c.JSON(200, gin.H{"status": "unloaded", "model": req.Model, "backend": b.Name()})
 }
