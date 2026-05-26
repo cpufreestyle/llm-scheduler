@@ -1,0 +1,21 @@
+# Binaries
+dist/
+*.exe
+
+# Dependencies
+vendor/
+
+# IDE
+.idea/
+.vscode/
+
+# Logs
+*.log
+
+# Temp files
+*.tmp
+*.bak
+
+# OS
+.DS_Store
+Thumbs.db
