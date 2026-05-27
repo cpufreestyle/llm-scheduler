@@ -33,6 +33,9 @@ func TestPlanner_SelectBestGPU(t *testing.T) {
 	p.RegisterGPU("nvidia-5070ti", "nvidia", 16000, 14000)
 	p.RegisterGPU("amd-7900xtx", "amd", 24576, 22000)
 	
+	t.Logf("GPUs registered: %d", len(p.gpus))
+	t.Logf("Estimated VRAM for qwen2.5:3b: %d MB", p.EstimateModelVRAM("qwen2.5:3b"))
+	
 	// Small model should fit on NVIDIA
 	gpu, err := p.SelectBestGPU("qwen2.5:3b", "")
 	if err != nil {

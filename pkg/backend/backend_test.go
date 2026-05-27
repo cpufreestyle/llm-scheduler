@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"io"
 	"testing"
 )
 
@@ -65,7 +66,7 @@ type mockBackend struct {
 func (m *mockBackend) Name() string { return m.name }
 func (m *mockBackend) ListModels() ([]ModelInfo, error) { return nil, nil }
 func (m *mockBackend) Chat(req ChatRequest) (*ChatResponse, error) { return nil, nil }
-func (m *mockBackend) ChatStream(req ChatRequest) (interface{}, error) { return nil, nil }
+func (m *mockBackend) ChatStream(req ChatRequest) (io.ReadCloser, error) { return nil, nil }
 func (m *mockBackend) LoadModel(model string) error { return nil }
 func (m *mockBackend) UnloadModel(model string) error { return nil }
 func (m *mockBackend) IsRunning(model string) (bool, error) { return false, nil }

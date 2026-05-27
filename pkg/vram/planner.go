@@ -1,6 +1,7 @@
 package vram
 
 import (
+	"math"
 	"strings"
 )
 
@@ -125,9 +126,9 @@ func (p *Planner) SelectBestGPU(model string, preferredGPU string) (string, erro
 		}
 	}
 	
-	// 自动选择：显存足够 + 显存利用率最优
+	// 自动选择：显存足够 + 显存利用率最优（binpack 策略）
 	var bestGPU string
-	bestScore := -1
+	bestScore := math.MinInt32
 	
 	for id, gpu := range p.gpus {
 		if gpu.VRAMFreeMB < requiredVRAM || gpu.MaxModelMB < requiredVRAM {
